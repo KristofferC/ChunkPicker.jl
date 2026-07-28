@@ -69,6 +69,24 @@ res.kind  # :chunk or :jet — which representation won
 ([PR #55](https://github.com/KristofferC/HyperHessians.jl/pull/55) or later); on older
 versions the Jet candidate is skipped. Disable it explicitly with `jet = false`.
 
+### HyperHessians: SIMD variants
+
+When the loaded HyperHessians supports the `simd` config option and the eltype is
+`Float32`/`Float64`, each chunk size is additionally benchmarked with SIMD.Vec-forced
+arithmetic and the recommendation includes the flag when it wins:
+
+```julia
+res = pick_chunk(HyperHessiansBackend(), f, rand(48))
+# ...
+#   chunk 8         45.8 μs  1.24x
+# * chunk 8 simd    36.9 μs  1.00x
+# → HyperHessians.HessianConfig(x, HyperHessians.Chunk{8}(); simd = true)
+
+res.simd  # whether the winning variant uses simd = true
+```
+
+Disable with `simd = false`.
+
 ## Keywords
 
 - `op`      — operation (default `:gradient` for ForwardDiff, `:hessian` for HyperHessians).
@@ -78,9 +96,10 @@ versions the Jet candidate is skipped. Disable it explicitly with `jet = false`.
 - `seconds` — per-candidate benchmark budget (default `0.5`).
 - `verbose` — print progress (default `true`).
 - `jet`     — HyperHessians only: include the `Jet` variant (default `true`).
+- `simd`    — HyperHessians only: also benchmark SIMD.Vec-forced variants (default `true`).
 
 ## Result
 
-`ChunkPickResult` fields: `chunk`, `kind` (`:chunk`/`:jet`), `timings`
-(`Vector{ChunkTiming}` with `chunk`, `kind`, `time` in seconds), `backend`, `op`, and a
-ready-to-use `recommendation` string.
+`ChunkPickResult` fields: `chunk`, `kind` (`:chunk`/`:jet`), `simd`, `timings`
+(`Vector{ChunkTiming}` with `chunk`, `kind`, `simd`, `time` in seconds), `backend`, `op`,
+and a ready-to-use `recommendation` string.

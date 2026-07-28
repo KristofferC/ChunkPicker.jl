@@ -18,9 +18,13 @@ function ChunkPicker.pick_chunk(
     )
     op === :hessian ||
         throw(ArgumentError("HyperHessiansBackend only supports `op = :hessian`, got :$op"))
-    simd_ok = HAS_SIMD && eltype(x) <: Union{Float32, Float64}
-    if simd && !simd_ok && verbose && !HAS_SIMD
-        @info "This HyperHessians has no `simd` config option; skipping the SIMD variants."
+    simd_ok = HAS_SIMD && eltype(x) in (Float32, Float64)
+    if simd && !simd_ok && verbose
+        if !HAS_SIMD
+            @info "This HyperHessians has no `simd` config option; skipping the SIMD variants."
+        else
+            @info "SIMD variants only apply to Float32/Float64 inputs (got eltype $(eltype(x))); skipping them."
+        end
     end
     candidates = Tuple{Int, Symbol, Bool}[]
     for N in chunks

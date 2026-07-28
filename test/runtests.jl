@@ -51,6 +51,15 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
             HyperHessians.HessianConfig,
             Tuple{Vector{Float64}, HyperHessians.Chunk{1}}, (:simd,),
         )
+        # the ext uses the same hasmethod probe; assert the probe agrees with
+        # actually constructing a simd config so a broken probe fails loudly
+        probe_works = try
+            HyperHessians.HessianConfig(x, HyperHessians.Chunk{2}(); simd = true)
+            true
+        catch
+            false
+        end
+        @test has_simd == probe_works
         res = pick_chunk(HyperHessiansBackend(), f, x; seconds = SECS, verbose = false)
         @test res isa ChunkPicker.ChunkPickResult
         @test res.op === :hessian
@@ -70,14 +79,18 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
         # SIMD variants are present iff the loaded HyperHessians supports them
         if has_simd
             @test count(t -> t.simd, res.timings) == n
-            if res.simd
-                @test occursin("simd = true", res.recommendation)
-                cfg = HyperHessians.HessianConfig(x, HyperHessians.Chunk{res.chunk}(); simd = true)
-                @test HyperHessians.hessian(f, x, cfg) ≈ ForwardDiff.hessian(f, x)
+            @test res.simd == occursin("simd = true", res.recommendation)
+            # simd configs compute the correct Hessian regardless of which
+            # variant happened to win the (noisy) benchmark
+            for T in (Float64, Float32)
+                xt = T.(x)
+                cfg = HyperHessians.HessianConfig(xt, HyperHessians.Chunk{2}(); simd = true)
+                @test HyperHessians.hessian(f, xt, cfg) ≈ ForwardDiff.hessian(f, xt) rtol = sqrt(eps(T))
             end
-            # simd variants can be turned off
+            # simd variants can be turned off without dropping the plain ones
             res2 = pick_chunk(HyperHessiansBackend(), f, x; seconds = SECS, simd = false, verbose = false)
             @test all(t -> !t.simd, res2.timings)
+            @test count(t -> t.kind === :chunk, res2.timings) == n
         else
             @test all(t -> !t.simd, res.timings)
         end
