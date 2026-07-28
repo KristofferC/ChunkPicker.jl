@@ -88,6 +88,13 @@ does one). The remaining ~1.2x is irreducible without knowing the function
 — cheap functions want tiny chunks, expensive ones want wide — which is
 what `pick_chunk` is for.
 
+Arch-awareness was evaluated and rejected: per machine, the arch-blind rule
+is within 1% of each machine's own best rule for Float64 (AVX2 and AVX-512
+are indistinguishable in the default's non-simd action space; arch
+differences concentrate in the simd variants and the Jet). The only real
+split is Float32 on NEON, which prefers a tail of 4 over 6 (~13% geomean)
+— judged not worth an arch branch, and measured on a single ARM chip.
+
 ## Data
 
 `results/grid_<host>[_f32].tsv`, one row per measurement
