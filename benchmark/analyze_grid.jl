@@ -114,6 +114,49 @@ function exhaustive(n)
     return cand
 end
 
+# Candidate-rule sketch, parameterized so variants can be scored quickly.
+# - tiny n: everything (it is cheap anyway)
+# - jet and full-vector single-eval up to `single_max`
+# - a fixed base set of small/SIMD-friendly chunks
+# - the "frontier" chunks cld(n, k) for small k (fewest evaluations per
+#   dual size; between frontier points a larger chunk buys nothing)
+function smart_set(
+        n;
+        tiny = 4,
+        single_max = 16,
+        base = [2, 3, 4, 5, 6, 8, 12],
+        frontier_k = 2:3,
+        divisors = false, # also chunks that divide n evenly (no padded chunk)
+        jet_simd_max = 7,
+        simd_chunks = :all, # :all | :even
+    )
+    cand = Tuple{Symbol, Int, Bool}[]
+    addc(c, s) = (c, true) != (1, true) && push!(cand, (:chunk, c, s)) # c1+s is pointless
+    simd_ok(c) = simd_chunks === :all || iseven(c)
+    if n <= tiny
+        for c in 1:n
+            addc(c, false)
+            simd_ok(c) && addc(c, true)
+        end
+    else
+        chunks = sort!(unique(vcat(
+            [c for c in base if c < n],
+            n <= single_max ? [n] : Int[],
+            [cld(n, k) for k in frontier_k if cld(n, k) <= 16 && cld(n, k) < n],
+            divisors ? [d for d in 4:16 if d < n && n % d == 0] : Int[],
+        )))
+        for c in chunks
+            addc(c, false)
+            simd_ok(c) && addc(c, true)
+        end
+    end
+    if n <= single_max
+        push!(cand, (:jet, n, false))
+        n <= jet_simd_max && push!(cand, (:jet, n, true))
+    end
+    return cand
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     rows = load(ARGS)
     println("== top-3 per case ==")

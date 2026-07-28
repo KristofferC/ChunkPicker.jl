@@ -94,4 +94,4 @@ function main(out::String)
     return
 end
 
-main(joinpath(homedir(), "chunk_grid_$(gethostname()).tsv"))
+main(joinpath(homedir(), "chunk_grid_$(gethostname())$(ELT === Float32 ? "_f32" : "").tsv"))
