@@ -26,7 +26,7 @@ const JET_DEFAULT_MAX_N = 32
 function ChunkPicker.pick_chunk(
         backend::HyperHessiansBackend, f, x::AbstractArray;
         op::Symbol = :hessian,
-        chunks = 1:min(length(x), 12),
+        chunks = :smart,
         tangents = nothing,
         seconds::Real = 0.5,
         jet::Union{Bool, Integer} = JET_DEFAULT_MAX_N,
@@ -45,20 +45,27 @@ function ChunkPicker.pick_chunk(
             @info "SIMD variants only apply to Float32/Float64 inputs (got eltype $(eltype(x))); skipping them."
         end
     end
+    smart = chunks === :smart
     candidates = Tuple{Int, Symbol, Bool}[]
-    for N in chunks
+    for N in ChunkPicker._resolve_chunks(chunks, length(x), op)
         push!(candidates, (N, :chunk, false))
         simd && simd_ok && push!(candidates, (N, :chunk, true))
     end
     jet_max = jet === true ? typemax(Int) : jet === false ? -1 : Int(jet)
+    # In the measured grid (benchmark/RESULTS.md) the jet never wins past
+    # n = 16, and jet-with-simd never past n = 7 (its triangle becomes one
+    # long Vec), so the smart set stops there. An explicit `jet` cap wins.
+    smart && jet === JET_DEFAULT_MAX_N && (jet_max = 16)
+    jet_simd_max = smart ? 7 : typemax(Int)
     if op === :hessian && jet !== false
         if !HAS_JET
             verbose && @info "This HyperHessians has no `Jet` config (needs PR #55 / a newer release); skipping the Jet variants."
         elseif length(x) > jet_max
-            verbose && @info "Input length $(length(x)) exceeds the Jet candidate cap of $jet_max (compile time for the unrolled triangle grows steeply with n); pass e.g. `jet = $(length(x))` or `jet = true` to include it anyway."
+            verbose && !smart && @info "Input length $(length(x)) exceeds the Jet candidate cap of $jet_max (compile time for the unrolled triangle grows steeply with n); pass e.g. `jet = $(length(x))` or `jet = true` to include it anyway."
         else
             push!(candidates, (length(x), :jet, false))
-            simd && simd_ok && HAS_JET_SIMD && push!(candidates, (length(x), :jet, true))
+            simd && simd_ok && HAS_JET_SIMD && length(x) <= jet_simd_max &&
+                push!(candidates, (length(x), :jet, true))
         end
     end
     tx = op === :hvp ? ChunkPicker._tangent_tuple(x, tangents) : nothing

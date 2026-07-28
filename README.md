@@ -119,12 +119,28 @@ res.simd  # whether the winning variant uses simd = true
 
 Disable with `simd = false`.
 
+## Smart candidate selection
+
+For `:hessian`/`:hvp` the default `chunks = :smart` benchmarks only the chunk sizes
+that ever win, instead of a dense `1:12` sweep. The set was derived from a
+brute-force grid (6 function families × 20 input sizes × chunks 1:16 × simd on/off,
+on AVX2, AVX-512 and NEON — see `benchmark/RESULTS.md`): a small base set
+`{2, 3, 4, 6, 8, 12, 16}`, the full-vector `n` while `n ≤ 16`, `⌈n/2⌉`/`⌈n/3⌉`
+(fewest evaluations per dual size), and divisors of `n` in `4:16` (no padded
+trailing chunk); everything for `n ≤ 4`. Across the measured grid the best
+candidate in this set is within 2% of the exhaustive optimum in 99% of cases
+(worst 9%), with ~40% fewer benchmarks than the dense sweep — which itself misses
+some of the true winners (e.g. full-vector at `n = 13..16`).
+
+Pass `chunks = :all` for the exhaustive brute-force sweep, or an explicit iterable
+of sizes.
+
 ## Keywords
 
 - `op`       — operation (default `:gradient` for `AutoForwardDiff`, `:hessian` for HyperHessians).
-- `chunks`   — candidate chunk sizes. Defaults are capped since the useful range is
-  small: `1:min(length(x), 32)` for `:gradient`/`:jacobian`, `1:min(length(x), 12)` for
-  `:hessian`/`:hvp`. Pass an explicit range to sweep further.
+- `chunks`   — candidate chunk sizes: `:smart` (default for `:hessian`/`:hvp`, see above),
+  `:all` (exhaustive), or an explicit iterable. `:gradient`/`:jacobian` default to
+  `1:min(length(x), 32)`.
 - `tangents` — for `op = :hvp`: the tangent vector or tuple of tangents (default: ones).
 - `seconds`  — per-candidate benchmark budget (default `0.5`).
 - `verbose`  — print progress (default `true`).
