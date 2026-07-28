@@ -83,6 +83,9 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
         HyperHessians.HessianConfig,
         Tuple{Vector{Float64}, HyperHessians.Chunk{1}}, (:simd,),
     )
+    HHExt = Base.get_extension(ChunkPicker, :ChunkPickerHyperHessiansExt)
+    has_jet = HHExt.HAS_JET
+    has_jet_simd = HHExt.HAS_JET_SIMD
 
     @testset "HyperHessians hessian" begin
         n = 6
@@ -105,16 +108,34 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
         # winning config computes the correct Hessian
         @test HyperHessians.hessian(f, x) ≈ ForwardDiff.hessian(f, x)
 
-        # Jet variant is present iff the loaded HyperHessians provides it
-        if isdefined(HyperHessians, :Jet)
-            @test any(t -> t.kind === :jet, res.timings)
+        # Jet variants are present iff the loaded HyperHessians provides them,
+        # with a simd flavor when the jet config accepts the flag
+        jet_timings = filter(t -> t.kind === :jet, res.timings)
+        if has_jet
+            @test length(jet_timings) == (has_jet_simd && has_simd ? 2 : 1)
+            @test count(t -> t.simd, jet_timings) == (has_jet_simd && has_simd ? 1 : 0)
+            for simd in (has_jet_simd ? (false, true) : (false,))
+                cfg = simd ? HyperHessians.HessianConfig(x, HyperHessians.Jet; simd = true) :
+                    HyperHessians.HessianConfig(x, HyperHessians.Jet)
+                @test HyperHessians.hessian(f, x, cfg) ≈ ForwardDiff.hessian(f, x)
+            end
+            res_nojet = pick_chunk(HyperHessiansBackend(), f, x; seconds = SECS, jet = false, verbose = false)
+            @test all(t -> t.kind === :chunk, res_nojet.timings)
+            # the integer form caps the input length for the Jet candidate
+            res_cap = pick_chunk(HyperHessiansBackend(), f, x; seconds = SECS, jet = n - 1, verbose = false)
+            @test all(t -> t.kind === :chunk, res_cap.timings)
+            res_forced = pick_chunk(
+                HyperHessiansBackend(), f, x;
+                seconds = SECS, jet = true, simd = false, verbose = false,
+            )
+            @test any(t -> t.kind === :jet, res_forced.timings)
         else
-            @test all(t -> t.kind === :chunk, res.timings)
+            @test isempty(jet_timings)
         end
 
         # SIMD variants are present iff the loaded HyperHessians supports them
         if has_simd
-            @test count(t -> t.simd, res.timings) == n
+            @test count(t -> t.simd, res.timings) == n + (has_jet_simd ? 1 : 0)
             @test res.simd == occursin("simd = true", res.recommendation)
             # simd configs compute the correct Hessian regardless of which
             # variant happened to win the (noisy) benchmark

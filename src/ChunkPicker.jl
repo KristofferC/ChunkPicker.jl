@@ -47,7 +47,8 @@ struct ChunkTiming
 end
 
 _label(chunk::Integer, kind::Symbol, simd::Bool) =
-    kind === :jet ? "Jet" : simd ? "chunk $(chunk) simd" : "chunk $(chunk)"
+    kind === :jet ? (simd ? "Jet simd" : "Jet") :
+    simd ? "chunk $(chunk) simd" : "chunk $(chunk)"
 _label(t::ChunkTiming) = _label(t.chunk, t.kind, t.simd)
 
 """
@@ -100,11 +101,15 @@ return the fastest variant.
 - `seconds`  : per-candidate benchmark budget passed to BenchmarkTools (default `0.5`).
 - `verbose`  : print progress while benchmarking (default `true`).
 
-The native HyperHessians backend additionally accepts `jet::Bool = true` to include
-the `Jet` variant (ignored, with a note, when the loaded HyperHessians has no `Jet`),
-and `simd::Bool = true` to also benchmark each chunk size with SIMD.Vec-forced
-arithmetic (`HessianConfig(...; simd = true)`; skipped when the loaded HyperHessians
-has no `simd` option or the eltype is not Float32/Float64).
+The native HyperHessians backend additionally accepts `jet` to include the `Jet`
+variants (HyperHessians never selects `Jet` on its own, so this sweep is how you
+find out whether it wins). `jet` is an `Integer` cap on the input length for which
+the candidate is included (default `32` — the jet's unrolled triangle makes compile
+time grow steeply with `length(x)`), or `true`/`false` to force/disable it; it is
+skipped, with a note, when the loaded HyperHessians has no `Jet`. `simd::Bool =
+true` additionally benchmarks each chunk size — and the `Jet` — with
+SIMD.Vec-forced arithmetic (`...; simd = true` configs; skipped when the loaded
+HyperHessians has no `simd` option or the eltype is not Float32/Float64).
 
 # Example
 ```julia
