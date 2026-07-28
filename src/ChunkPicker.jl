@@ -1,28 +1,35 @@
 module ChunkPicker
 
 using Printf: @sprintf
+import DifferentiationInterface as DI
+using DifferentiationInterface: AutoForwardDiff, AutoHyperHessians
+using BenchmarkTools: @belapsed
 
-export pick_chunk, HyperHessiansBackend
+export pick_chunk, HyperHessiansBackend, AutoForwardDiff, AutoHyperHessians
 
 """
     AbstractBackend
 
 Supertype for ChunkPicker's native backends. Besides these, `pick_chunk`
-accepts ADTypes backends driven through DifferentiationInterface — currently
-`AutoForwardDiff` (load DifferentiationInterface and ForwardDiff).
+accepts ADTypes backends driven through DifferentiationInterface —
+`AutoForwardDiff` and `AutoHyperHessians` (load the corresponding AD package).
 """
 abstract type AbstractBackend end
 
 """
     HyperHessiansBackend()
 
-Select HyperHessians. Supports `op = :hessian` and `op = :hvp`. Benchmarks the
-`HyperDual` chunk sweep, the SIMD.Vec variants, and, when the loaded version
-provides it, the `Jet` representation. Requires `using HyperHessians`.
+Select HyperHessians through its native config API. Supports `op = :hessian`
+and `op = :hvp` and benchmarks the axes DifferentiationInterface cannot
+express: the SIMD.Vec variants and, when the loaded version provides it, the
+`Jet` representation. For a plain chunk sweep use `AutoHyperHessians()`
+instead. Requires `using HyperHessians`.
 """
 struct HyperHessiansBackend <: AbstractBackend end
 
 backendname(::HyperHessiansBackend) = "HyperHessians"
+backendname(::AutoForwardDiff) = "AutoForwardDiff"
+backendname(::AutoHyperHessians) = "AutoHyperHessians"
 
 """
     ChunkTiming(chunk, kind, simd, time)
@@ -73,16 +80,17 @@ Benchmark `f` differentiated at `x` with `backend` across candidate chunk sizes 
 return the fastest variant.
 
 # Arguments
-- `backend` : an ADTypes backend driven through DifferentiationInterface (currently
-              `AutoForwardDiff()`; requires DifferentiationInterface and ForwardDiff to
-              be loaded), or the native [`HyperHessiansBackend`](@ref).
+- `backend` : an ADTypes backend driven through DifferentiationInterface —
+              `AutoForwardDiff()` (requires `using ForwardDiff`) or
+              `AutoHyperHessians()` (requires `using HyperHessians`) — or the
+              native [`HyperHessiansBackend`](@ref).
 - `f`       : the function to differentiate. For `:gradient`/`:hessian`/`:hvp`,
               `f(x)::Real`; for `:jacobian`, `f(x)::AbstractArray`.
 - `x`       : the input point (`AbstractArray`).
 
 # Keywords
 - `op`       : `:gradient`, `:jacobian`, `:hessian` or `:hvp` (`AutoForwardDiff`);
-               `:hessian` or `:hvp` (HyperHessians).
+               `:hessian` or `:hvp` (`AutoHyperHessians` and HyperHessians native).
 - `chunks`   : candidate chunk sizes. Defaults are capped since the useful range is
                small: `1:min(length(x), 32)` for `:gradient`/`:jacobian`,
                `1:min(length(x), 12)` for `:hessian`/`:hvp`. Pass an explicit range to
@@ -92,24 +100,24 @@ return the fastest variant.
 - `seconds`  : per-candidate benchmark budget passed to BenchmarkTools (default `0.5`).
 - `verbose`  : print progress while benchmarking (default `true`).
 
-HyperHessians additionally accepts `jet::Bool = true` to include the `Jet` variant
-(ignored, with a note, when the loaded HyperHessians has no `Jet`), and
-`simd::Bool = true` to also benchmark each chunk size with SIMD.Vec-forced
-arithmetic (`HessianConfig(...; simd = true)`; skipped when the loaded
-HyperHessians has no `simd` option or the eltype is not Float32/Float64).
+The native HyperHessians backend additionally accepts `jet::Bool = true` to include
+the `Jet` variant (ignored, with a note, when the loaded HyperHessians has no `Jet`),
+and `simd::Bool = true` to also benchmark each chunk size with SIMD.Vec-forced
+arithmetic (`HessianConfig(...; simd = true)`; skipped when the loaded HyperHessians
+has no `simd` option or the eltype is not Float32/Float64).
 
 # Example
 ```julia
-using ChunkPicker, DifferentiationInterface, ForwardDiff
+using ChunkPicker, ForwardDiff
 res = pick_chunk(AutoForwardDiff(), x -> sum(abs2, x), rand(50); op = :gradient)
 res.chunk
 ```
 """
 function pick_chunk end
 
-# Fallback for a backend whose package has not been loaded. The extension adds a
-# strictly more specific method on the concrete backend type, so this only fires
-# when the extension is inactive.
+# Fallback for a native backend whose package has not been loaded. The extension
+# adds a strictly more specific method on the concrete backend type, so this
+# only fires when the extension is inactive.
 function pick_chunk(b::AbstractBackend, f, x::AbstractArray; kwargs...)
     error(
         "$(backendname(b)) must be loaded to use `$(nameof(typeof(b)))`. " *
@@ -117,7 +125,7 @@ function pick_chunk(b::AbstractBackend, f, x::AbstractArray; kwargs...)
     )
 end
 
-# Shared driver used by the extensions.
+# Shared driver, also used by the HyperHessians extension.
 # - `candidates` : iterable of `(chunk::Int, kind::Symbol, simd::Bool)`.
 # - `bench(chunk, kind, simd)` : builds the config/output and returns the minimum time (seconds).
 # - `recommend(chunk, kind, simd)` : constructor snippet for the given variant.
@@ -148,7 +156,7 @@ function _fmt(t::Real) # t in seconds
     return @sprintf("%.3f s", t)
 end
 
-# Default tangent(s) for op = :hvp; extensions normalize user input with this.
+# Default tangent(s) for op = :hvp.
 _tangent_tuple(x, ::Nothing) = (ones(float(eltype(x)), size(x)...),)
 _tangent_tuple(x, v::AbstractArray) = (v,)
 _tangent_tuple(x, v::Tuple) = v
@@ -163,6 +171,65 @@ function Base.show(io::IO, ::MIME"text/plain", r::ChunkPickResult)
     end
     print(io, "→ ", r.recommendation)
     return
+end
+
+## ADTypes backends, driven through DifferentiationInterface. The chunk size is
+## a parameter of the backend type, so the sweep rebuilds the backend per
+## candidate; DI's preparation is rebuilt with it. The AD package itself
+## (ForwardDiff, HyperHessians) must be loaded for DI to drive it.
+const ChunkedADType = Union{AutoForwardDiff, AutoHyperHessians}
+
+_with_chunk(b::AutoForwardDiff, N::Int) = AutoForwardDiff(; chunksize = N, tag = b.tag)
+_with_chunk(::AutoHyperHessians, N::Int) = AutoHyperHessians(; chunksize = N)
+
+_supported_ops(::AutoForwardDiff) = (:gradient, :jacobian, :hessian, :hvp)
+_supported_ops(::AutoHyperHessians) = (:hessian, :hvp)
+
+function pick_chunk(
+        backend::ChunkedADType, f, x::AbstractArray;
+        op::Symbol = first(_supported_ops(backend)),
+        chunks = 1:min(length(x), op === :hessian || op === :hvp ? 12 : 32),
+        tangents = nothing,
+        seconds::Real = 0.5,
+        verbose::Bool = true,
+    )
+    op in _supported_ops(backend) || throw(
+        ArgumentError(
+            "$(backendname(backend)): `op` must be one of " *
+                "$(_supported_ops(backend)), got :$op"
+        )
+    )
+    tx = op === :hvp ? _tangent_tuple(x, tangents) : nothing
+    candidates = [(N, :chunk, false) for N in chunks]
+    bench = (N, _kind, _simd) -> _bench_di(Val(op), f, _with_chunk(backend, N), x, tx, seconds)
+    name = backendname(backend)
+    recommend = (N, _kind, _simd) -> "$name(chunksize = $N)"
+    return _run(bench, recommend, backend, op, candidates; verbose)
+end
+
+function _bench_di(::Val{:gradient}, f, b, x, tx, seconds)
+    out = similar(x, float(eltype(x)))
+    prep = DI.prepare_gradient(f, b, x)
+    return @belapsed DI.gradient!($f, $out, $prep, $b, $x) seconds = seconds
+end
+
+function _bench_di(::Val{:jacobian}, f, b, x, tx, seconds)
+    y = f(x)
+    out = similar(y, float(eltype(y)), length(y), length(x))
+    prep = DI.prepare_jacobian(f, b, x)
+    return @belapsed DI.jacobian!($f, $out, $prep, $b, $x) seconds = seconds
+end
+
+function _bench_di(::Val{:hessian}, f, b, x, tx, seconds)
+    out = similar(x, float(eltype(x)), length(x), length(x))
+    prep = DI.prepare_hessian(f, b, x)
+    return @belapsed DI.hessian!($f, $out, $prep, $b, $x) seconds = seconds
+end
+
+function _bench_di(::Val{:hvp}, f, b, x, tx, seconds)
+    ty = map(v -> similar(v, float(eltype(v))), tx)
+    prep = DI.prepare_hvp(f, b, x, tx)
+    return @belapsed DI.hvp!($f, $ty, $prep, $b, $x, $tx) seconds = seconds
 end
 
 end # module ChunkPicker

@@ -7,20 +7,26 @@ Given a function, an input, and an operation, ChunkPicker times every candidate
 configuration with [BenchmarkTools](https://github.com/JuliaCI/BenchmarkTools.jl) and
 tells you which one is fastest for *your* function.
 
-The AD backends are loaded through package extensions, so ChunkPicker itself only
-depends on BenchmarkTools. ADTypes backends are driven through
-[DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl);
-a backend becomes available when you load its packages:
+ADTypes backends are driven through
+[DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl)
+(a direct dependency; the backend types are re-exported). Load the AD package
+itself to make its backend usable:
 
-| Backend                 | Load                                             | Operations                                     |
-| ----------------------- | ------------------------------------------------ | ---------------------------------------------- |
-| `AutoForwardDiff()`     | `using DifferentiationInterface, ForwardDiff`    | `:gradient`, `:jacobian`, `:hessian`, `:hvp`   |
-| `HyperHessiansBackend()`| `using HyperHessians`                            | `:hessian` (chunks × simd + `Jet`), `:hvp`     |
+| Backend                 | Load                  | Operations                                     |
+| ----------------------- | --------------------- | ---------------------------------------------- |
+| `AutoForwardDiff()`     | `using ForwardDiff`   | `:gradient`, `:jacobian`, `:hessian`, `:hvp`   |
+| `AutoHyperHessians()`   | `using HyperHessians` | `:hessian`, `:hvp`                             |
+| `HyperHessiansBackend()`| `using HyperHessians` | `:hessian` (chunks × simd + `Jet`), `:hvp` (chunks × simd) |
+
+`AutoHyperHessians` sweeps the plain chunk axis through DifferentiationInterface;
+the native `HyperHessiansBackend` additionally benchmarks the axes ADTypes cannot
+express yet (the `simd` variants and the `Jet` representation) and recommends a
+`HessianConfig`/`HVPConfig` instead of a backend.
 
 ## Usage
 
 ```julia
-using ChunkPicker, DifferentiationInterface, ForwardDiff
+using ChunkPicker, ForwardDiff
 
 f = x -> sum(abs2, x) + exp(sum(x))
 x = rand(50)

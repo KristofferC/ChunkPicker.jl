@@ -52,6 +52,27 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
         @test_throws ArgumentError pick_chunk(AutoForwardDiff(), f, rand(3); op = :nope, verbose = false)
     end
 
+    @testset "AutoHyperHessians $op" for op in (:hessian, :hvp)
+        n = 6
+        x = rand(n)
+        res = pick_chunk(AutoHyperHessians(), f, x; op, seconds = SECS, verbose = false)
+        @test res.chunk in 1:n
+        @test length(res.timings) == n
+        @test all(t -> t.kind === :chunk && !t.simd, res.timings)
+        @test occursin("AutoHyperHessians(chunksize = $(res.chunk))", res.recommendation)
+        b = AutoHyperHessians(chunksize = res.chunk)
+        if op === :hessian
+            @test DI.hessian(f, b, x) ≈ ForwardDiff.hessian(f, x)
+        else
+            v = ones(n)
+            @test DI.hvp(f, b, x, (v,))[1] ≈ ForwardDiff.hessian(f, x) * v
+        end
+    end
+
+    @testset "AutoHyperHessians rejects first-order ops" begin
+        @test_throws ArgumentError pick_chunk(AutoHyperHessians(), f, rand(3); op = :gradient, verbose = false)
+    end
+
     @testset "custom chunks" begin
         res = pick_chunk(AutoForwardDiff(), f, rand(8); op = :gradient, chunks = [2, 4, 8], seconds = SECS, verbose = false)
         @test [t.chunk for t in res.timings] == [2, 4, 8]
