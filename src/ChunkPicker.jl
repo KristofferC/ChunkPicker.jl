@@ -2,34 +2,26 @@ module ChunkPicker
 
 using Printf: @sprintf
 
-export pick_chunk, ForwardDiffBackend, HyperHessiansBackend
+export pick_chunk, HyperHessiansBackend
 
 """
     AbstractBackend
 
-Supertype for the AD backends `ChunkPicker` can benchmark. Load the corresponding
-package (`ForwardDiff` or `HyperHessians`) to enable a backend.
+Supertype for ChunkPicker's native backends. Besides these, `pick_chunk`
+accepts ADTypes backends driven through DifferentiationInterface — currently
+`AutoForwardDiff` (load DifferentiationInterface and ForwardDiff).
 """
 abstract type AbstractBackend end
 
 """
-    ForwardDiffBackend()
-
-Select ForwardDiff. Supports `op = :gradient`, `:jacobian` and `:hessian`.
-Requires `using ForwardDiff`.
-"""
-struct ForwardDiffBackend <: AbstractBackend end
-
-"""
     HyperHessiansBackend()
 
-Select HyperHessians. Supports `op = :hessian` only. Benchmarks the `HyperDual`
-chunk sweep and, when the loaded version provides it, the `Jet` representation.
-Requires `using HyperHessians`.
+Select HyperHessians. Supports `op = :hessian` and `op = :hvp`. Benchmarks the
+`HyperDual` chunk sweep, the SIMD.Vec variants, and, when the loaded version
+provides it, the `Jet` representation. Requires `using HyperHessians`.
 """
 struct HyperHessiansBackend <: AbstractBackend end
 
-backendname(::ForwardDiffBackend) = "ForwardDiff"
 backendname(::HyperHessiansBackend) = "HyperHessians"
 
 """
@@ -62,38 +54,43 @@ Result of [`pick_chunk`](@ref). Fields:
                      (HyperHessians `simd = true` configs).
 - `timings`        : `Vector{ChunkTiming}`, one per candidate.
 - `backend`, `op`  : what was benchmarked.
-- `recommendation` : ready-to-use config constructor for the fastest variant.
+- `recommendation` : ready-to-use backend/config constructor for the fastest variant.
 """
 struct ChunkPickResult
     chunk::Int
     kind::Symbol
     simd::Bool
     timings::Vector{ChunkTiming}
-    backend::AbstractBackend
+    backend::Any
     op::Symbol
     recommendation::String
 end
 
 """
-    pick_chunk(backend, f, x; op, chunks, seconds, verbose) -> ChunkPickResult
+    pick_chunk(backend, f, x; op, chunks, tangents, seconds, verbose) -> ChunkPickResult
 
-Benchmark `f` differentiated at `x` with `backend` across candidate chunk sizes (and,
-for HyperHessians, the `Jet` representation) and return the fastest variant.
+Benchmark `f` differentiated at `x` with `backend` across candidate chunk sizes and
+return the fastest variant.
 
 # Arguments
-- `backend` : [`ForwardDiffBackend`](@ref) or [`HyperHessiansBackend`](@ref).
-- `f`       : the function to differentiate. For `:gradient`/`:hessian`, `f(x)::Real`;
-              for `:jacobian`, `f(x)::AbstractArray`.
+- `backend` : an ADTypes backend driven through DifferentiationInterface (currently
+              `AutoForwardDiff()`; requires DifferentiationInterface and ForwardDiff to
+              be loaded), or the native [`HyperHessiansBackend`](@ref).
+- `f`       : the function to differentiate. For `:gradient`/`:hessian`/`:hvp`,
+              `f(x)::Real`; for `:jacobian`, `f(x)::AbstractArray`.
 - `x`       : the input point (`AbstractArray`).
 
 # Keywords
-- `op`      : `:gradient`, `:jacobian` or `:hessian` (default `:gradient` for ForwardDiff,
-              `:hessian` for HyperHessians).
-- `chunks`  : candidate chunk sizes. Defaults are capped since the useful range is small:
-              `1:min(length(x), 32)` for `:gradient`/`:jacobian`, `1:min(length(x), 12)`
-              for `:hessian`. Pass an explicit range to sweep further.
-- `seconds` : per-candidate benchmark budget passed to BenchmarkTools (default `0.5`).
-- `verbose` : print progress while benchmarking (default `true`).
+- `op`       : `:gradient`, `:jacobian`, `:hessian` or `:hvp` (`AutoForwardDiff`);
+               `:hessian` or `:hvp` (HyperHessians).
+- `chunks`   : candidate chunk sizes. Defaults are capped since the useful range is
+               small: `1:min(length(x), 32)` for `:gradient`/`:jacobian`,
+               `1:min(length(x), 12)` for `:hessian`/`:hvp`. Pass an explicit range to
+               sweep further.
+- `tangents` : for `op = :hvp`, the tangent vector (or tuple of vectors for bundled
+               directions). Defaults to a vector of ones.
+- `seconds`  : per-candidate benchmark budget passed to BenchmarkTools (default `0.5`).
+- `verbose`  : print progress while benchmarking (default `true`).
 
 HyperHessians additionally accepts `jet::Bool = true` to include the `Jet` variant
 (ignored, with a note, when the loaded HyperHessians has no `Jet`), and
@@ -103,8 +100,8 @@ HyperHessians has no `simd` option or the eltype is not Float32/Float64).
 
 # Example
 ```julia
-using ChunkPicker, ForwardDiff
-res = pick_chunk(ForwardDiffBackend(), x -> sum(abs2, x), rand(50); op = :gradient)
+using ChunkPicker, DifferentiationInterface, ForwardDiff
+res = pick_chunk(AutoForwardDiff(), x -> sum(abs2, x), rand(50); op = :gradient)
 res.chunk
 ```
 """
@@ -116,7 +113,7 @@ function pick_chunk end
 function pick_chunk(b::AbstractBackend, f, x::AbstractArray; kwargs...)
     error(
         "$(backendname(b)) must be loaded to use `$(nameof(typeof(b)))`. " *
-        "Run `using $(backendname(b))` first.",
+            "Run `using $(backendname(b))` first.",
     )
 end
 
@@ -124,7 +121,7 @@ end
 # - `candidates` : iterable of `(chunk::Int, kind::Symbol, simd::Bool)`.
 # - `bench(chunk, kind, simd)` : builds the config/output and returns the minimum time (seconds).
 # - `recommend(chunk, kind, simd)` : constructor snippet for the given variant.
-function _run(bench, recommend, backend::AbstractBackend, op::Symbol, candidates; verbose::Bool)
+function _run(bench, recommend, backend, op::Symbol, candidates; verbose::Bool)
     isempty(candidates) && throw(ArgumentError("no candidates to benchmark"))
     verbose && printstyled(
         "Benchmarking $(backendname(backend)) :$op over $(length(candidates)) candidate(s)\n";
@@ -145,11 +142,16 @@ function _run(bench, recommend, backend::AbstractBackend, op::Symbol, candidates
 end
 
 function _fmt(t::Real) # t in seconds
-    t < 1e-6 && return @sprintf("%.1f ns", t * 1e9)
-    t < 1e-3 && return @sprintf("%.3f μs", t * 1e6)
-    t < 1.0  && return @sprintf("%.3f ms", t * 1e3)
+    t < 1.0e-6 && return @sprintf("%.1f ns", t * 1.0e9)
+    t < 1.0e-3 && return @sprintf("%.3f μs", t * 1.0e6)
+    t < 1.0 && return @sprintf("%.3f ms", t * 1.0e3)
     return @sprintf("%.3f s", t)
 end
+
+# Default tangent(s) for op = :hvp; extensions normalize user input with this.
+_tangent_tuple(x, ::Nothing) = (ones(float(eltype(x)), size(x)...),)
+_tangent_tuple(x, v::AbstractArray) = (v,)
+_tangent_tuple(x, v::Tuple) = v
 
 function Base.show(io::IO, ::MIME"text/plain", r::ChunkPickResult)
     println(io, "ChunkPickResult ($(backendname(r.backend)), :$(r.op))")
@@ -160,6 +162,7 @@ function Base.show(io::IO, ::MIME"text/plain", r::ChunkPickResult)
         println(io, best ? "* " : "  ", rpad(_label(t), 14), " ", lpad(_fmt(t.time), 10), "  ", @sprintf("%.2fx", rel))
     end
     print(io, "→ ", r.recommendation)
+    return
 end
 
 end # module ChunkPicker

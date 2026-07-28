@@ -8,43 +8,61 @@ configuration with [BenchmarkTools](https://github.com/JuliaCI/BenchmarkTools.jl
 tells you which one is fastest for *your* function.
 
 The AD backends are loaded through package extensions, so ChunkPicker itself only
-depends on BenchmarkTools. A backend becomes available when you load its package:
+depends on BenchmarkTools. ADTypes backends are driven through
+[DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl);
+a backend becomes available when you load its packages:
 
-| Backend                 | Load           | Operations                        |
-| ----------------------- | -------------- | --------------------------------- |
-| `ForwardDiffBackend()`  | `using ForwardDiff`   | `:gradient`, `:jacobian`, `:hessian` |
-| `HyperHessiansBackend()`| `using HyperHessians` | `:hessian` (HyperDual chunks + `Jet`) |
+| Backend                 | Load                                             | Operations                                     |
+| ----------------------- | ------------------------------------------------ | ---------------------------------------------- |
+| `AutoForwardDiff()`     | `using DifferentiationInterface, ForwardDiff`    | `:gradient`, `:jacobian`, `:hessian`, `:hvp`   |
+| `HyperHessiansBackend()`| `using HyperHessians`                            | `:hessian` (chunks × simd + `Jet`), `:hvp`     |
 
 ## Usage
 
 ```julia
-using ChunkPicker, ForwardDiff
+using ChunkPicker, DifferentiationInterface, ForwardDiff
 
 f = x -> sum(abs2, x) + exp(sum(x))
 x = rand(50)
 
-res = pick_chunk(ForwardDiffBackend(), f, x; op = :gradient)
+res = pick_chunk(AutoForwardDiff(), f, x; op = :gradient)
 res.chunk           # fastest chunk size, e.g. 12
-res.recommendation  # "ForwardDiff.GradientConfig(f, x, ForwardDiff.Chunk{12}())"
+res.recommendation  # "AutoForwardDiff(chunksize = 12)"
 ```
+
+The recommended backend plugs straight into DifferentiationInterface
+(`gradient(f, prep, AutoForwardDiff(chunksize = 12), x)` etc.). Chunk size is a
+parameter of the ADTypes backend type, which is what makes the sweep possible —
+DifferentiationInterface builds its own preparation internally, so there is no
+separate config object to pass.
 
 `pick_chunk` prints progress as it benchmarks (disable with `verbose = false`) and
 returns a `ChunkPickResult` that shows the full table:
 
 ```
-ChunkPickResult (ForwardDiff, :gradient)
+ChunkPickResult (AutoForwardDiff, :gradient)
   chunk 1      1.204 μs  2.10x
   ...
 * chunk 12     573.0 ns  1.00x
-→ ForwardDiff.GradientConfig(f, x, ForwardDiff.Chunk{12}())
+→ AutoForwardDiff(chunksize = 12)
+```
+
+### Hessian–vector products
+
+`op = :hvp` benchmarks Hessian–vector products; pass the tangent (or a tuple of
+tangents for bundled directions) with `tangents`:
+
+```julia
+pick_chunk(AutoForwardDiff(), f, x; op = :hvp, tangents = rand(50))
+pick_chunk(HyperHessiansBackend(), f, x; op = :hvp, tangents = (v1, v2))
 ```
 
 ### Jacobian / Hessian
 
 ```julia
 g = x -> [sum(sin, x), prod(x)]          # R^n -> R^m
-pick_chunk(ForwardDiffBackend(), g, x; op = :jacobian)
-pick_chunk(ForwardDiffBackend(), f, x; op = :hessian)
+pick_chunk(AutoForwardDiff(), g, x; op = :jacobian)
+pick_chunk(AutoForwardDiff(), f, x; op = :hessian)
 ```
 
 ### HyperHessians: HyperDual chunks vs Jet
@@ -89,14 +107,15 @@ Disable with `simd = false`.
 
 ## Keywords
 
-- `op`      — operation (default `:gradient` for ForwardDiff, `:hessian` for HyperHessians).
-- `chunks`  — candidate chunk sizes. Defaults are capped since the useful range is
+- `op`       — operation (default `:gradient` for `AutoForwardDiff`, `:hessian` for HyperHessians).
+- `chunks`   — candidate chunk sizes. Defaults are capped since the useful range is
   small: `1:min(length(x), 32)` for `:gradient`/`:jacobian`, `1:min(length(x), 12)` for
-  `:hessian`. Pass an explicit range to sweep further.
-- `seconds` — per-candidate benchmark budget (default `0.5`).
-- `verbose` — print progress (default `true`).
-- `jet`     — HyperHessians only: include the `Jet` variant (default `true`).
-- `simd`    — HyperHessians only: also benchmark SIMD.Vec-forced variants (default `true`).
+  `:hessian`/`:hvp`. Pass an explicit range to sweep further.
+- `tangents` — for `op = :hvp`: the tangent vector or tuple of tangents (default: ones).
+- `seconds`  — per-candidate benchmark budget (default `0.5`).
+- `verbose`  — print progress (default `true`).
+- `jet`      — HyperHessians only: include the `Jet` variant (default `true`).
+- `simd`     — HyperHessians only: also benchmark SIMD.Vec-forced variants (default `true`).
 
 ## Result
 
