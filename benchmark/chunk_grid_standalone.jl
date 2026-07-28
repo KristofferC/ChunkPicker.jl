@@ -22,6 +22,11 @@ import DiffTests
 
 BenchmarkTools.DEFAULT_PARAMETERS.seconds = parse(Float64, get(ENV, "GRID_SECONDS", "0.15"))
 
+# GRID_ELTYPE=Float32 runs a reduced Float32 grid with chunks up to 24, to
+# check whether the doubled SIMD lane count shifts the winning chunk sizes up.
+const ELT = get(ENV, "GRID_ELTYPE", "Float64") == "Float32" ? Float32 : Float64
+const MINI = ELT === Float32
+
 sumexp(x) = sum(abs2, x) + exp(sum(x))
 logbarrier(x) = -sum(log, x) + 0.5 * sum(abs2, x)
 function chaincouple(x)
@@ -41,19 +46,19 @@ const FUNCS = [
     "chaincouple" => chaincouple,
 ]
 
-const SIZES = [1:12; 14; 16; 20; 24; 32; 48; 64; 100]
-const CHUNK_CAP = 16
+const SIZES = MINI ? [4, 8, 12, 16, 24, 32, 48, 64, 100] : [1:12; 14; 16; 20; 24; 32; 48; 64; 100]
+const CHUNK_CAP = MINI ? 24 : 16
 const JET_CAP = 16
 
 function bench_chunk(f, x, c::Int, simd::Bool)
     cfg = HessianConfig(x, Chunk{c}(); simd)
-    H = zeros(length(x), length(x))
+    H = zeros(eltype(x), length(x), length(x))
     return @belapsed HyperHessians.hessian!($H, $f, $x, $cfg)
 end
 
 function bench_jet(f, x, simd::Bool)
     cfg = HessianConfig(x, Jet; simd)
-    H = zeros(length(x), length(x))
+    H = zeros(eltype(x), length(x), length(x))
     return @belapsed HyperHessians.hessian!($H, $f, $x, $cfg)
 end
 
@@ -61,11 +66,11 @@ function main(out::String)
     ncases = length(FUNCS) * length(SIZES)
     done = 0
     open(out, "w") do io
-        println(io, "# host=$(gethostname()) julia=$(VERSION) cpu=$(Sys.cpu_info()[1].model) date=$(time())")
+        println(io, "# host=$(gethostname()) elt=$(ELT) julia=$(VERSION) cpu=$(Sys.cpu_info()[1].model) date=$(time())")
         println(io, "func\tn\tkind\tchunk\tsimd\ttime")
         for (name, f) in FUNCS
             for n in SIZES
-                x = n == 1 ? [0.55] : collect(range(0.1, 1.0; length = n))
+                x = n == 1 ? ELT[0.55] : collect(range(ELT(0.1), ELT(1.0); length = n))
                 chunks = collect(1:min(n, CHUNK_CAP))
                 CHUNK_CAP < n <= 20 && push!(chunks, n)
                 for c in chunks, simd in (false, true)
