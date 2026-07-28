@@ -13,10 +13,10 @@ function ChunkPicker.pick_chunk(
     )
     op in (:gradient, :jacobian, :hessian) ||
         throw(ArgumentError("ForwardDiffBackend: `op` must be :gradient, :jacobian or :hessian, got :$op"))
-    candidates = [(N, :chunk) for N in chunks]
-    bench = (N, _kind) -> _bench(Val(op), f, x, N, seconds)
+    candidates = [(N, :chunk, false) for N in chunks]
+    bench = (N, _kind, _simd) -> _bench(Val(op), f, x, N, seconds)
     cfgname = op === :gradient ? "GradientConfig" : op === :jacobian ? "JacobianConfig" : "HessianConfig"
-    recommend = (N, _kind) -> "ForwardDiff.$cfgname(f, x, ForwardDiff.Chunk{$N}())"
+    recommend = (N, _kind, _simd) -> "ForwardDiff.$cfgname(f, x, ForwardDiff.Chunk{$N}())"
     return ChunkPicker._run(bench, recommend, backend, op, candidates; verbose)
 end
 

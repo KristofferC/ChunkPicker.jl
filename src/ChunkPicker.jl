@@ -33,20 +33,23 @@ backendname(::ForwardDiffBackend) = "ForwardDiff"
 backendname(::HyperHessiansBackend) = "HyperHessians"
 
 """
-    ChunkTiming(chunk, kind, time)
+    ChunkTiming(chunk, kind, simd, time)
 
 One measurement. `kind` is `:chunk` (a chunked config of size `chunk`) or `:jet`
 (the HyperHessians symmetric `Jet`, which computes the whole Hessian at once).
+`simd` marks HyperHessians' SIMD.Vec-forced arithmetic (`simd = true` configs).
 `time` is the minimum measured time in seconds.
 """
 struct ChunkTiming
     chunk::Int
     kind::Symbol
+    simd::Bool
     time::Float64
 end
 
-_label(chunk::Integer, kind::Symbol) = kind === :jet ? "Jet" : "chunk $(chunk)"
-_label(t::ChunkTiming) = _label(t.chunk, t.kind)
+_label(chunk::Integer, kind::Symbol, simd::Bool) =
+    kind === :jet ? "Jet" : simd ? "chunk $(chunk) simd" : "chunk $(chunk)"
+_label(t::ChunkTiming) = _label(t.chunk, t.kind, t.simd)
 
 """
     ChunkPickResult
@@ -55,6 +58,8 @@ Result of [`pick_chunk`](@ref). Fields:
 
 - `chunk`          : chunk size of the fastest variant (for a `Jet` this is `length(x)`).
 - `kind`           : `:chunk` or `:jet` — which representation was fastest.
+- `simd`           : whether the fastest variant uses SIMD.Vec-forced arithmetic
+                     (HyperHessians `simd = true` configs).
 - `timings`        : `Vector{ChunkTiming}`, one per candidate.
 - `backend`, `op`  : what was benchmarked.
 - `recommendation` : ready-to-use config constructor for the fastest variant.
@@ -62,6 +67,7 @@ Result of [`pick_chunk`](@ref). Fields:
 struct ChunkPickResult
     chunk::Int
     kind::Symbol
+    simd::Bool
     timings::Vector{ChunkTiming}
     backend::AbstractBackend
     op::Symbol
@@ -90,7 +96,10 @@ for HyperHessians, the `Jet` representation) and return the fastest variant.
 - `verbose` : print progress while benchmarking (default `true`).
 
 HyperHessians additionally accepts `jet::Bool = true` to include the `Jet` variant
-(ignored, with a note, when the loaded HyperHessians has no `Jet`).
+(ignored, with a note, when the loaded HyperHessians has no `Jet`), and
+`simd::Bool = true` to also benchmark each chunk size with SIMD.Vec-forced
+arithmetic (`HessianConfig(...; simd = true)`; skipped when the loaded
+HyperHessians has no `simd` option or the eltype is not Float32/Float64).
 
 # Example
 ```julia
@@ -112,9 +121,9 @@ function pick_chunk(b::AbstractBackend, f, x::AbstractArray; kwargs...)
 end
 
 # Shared driver used by the extensions.
-# - `candidates` : iterable of `(chunk::Int, kind::Symbol)`.
-# - `bench(chunk, kind)` : builds the config/output and returns the minimum time (seconds).
-# - `recommend(chunk, kind)` : constructor snippet for the given variant.
+# - `candidates` : iterable of `(chunk::Int, kind::Symbol, simd::Bool)`.
+# - `bench(chunk, kind, simd)` : builds the config/output and returns the minimum time (seconds).
+# - `recommend(chunk, kind, simd)` : constructor snippet for the given variant.
 function _run(bench, recommend, backend::AbstractBackend, op::Symbol, candidates; verbose::Bool)
     isempty(candidates) && throw(ArgumentError("no candidates to benchmark"))
     verbose && printstyled(
@@ -122,17 +131,17 @@ function _run(bench, recommend, backend::AbstractBackend, op::Symbol, candidates
         bold = true,
     )
     timings = ChunkTiming[]
-    for (chunk, kind) in candidates
-        t = bench(chunk, kind)
-        push!(timings, ChunkTiming(chunk, kind, t))
-        verbose && println("  ", rpad(_label(chunk, kind), 10), " ", _fmt(t))
+    for (chunk, kind, simd) in candidates
+        t = bench(chunk, kind, simd)
+        push!(timings, ChunkTiming(chunk, kind, simd, t))
+        verbose && println("  ", rpad(_label(chunk, kind, simd), 14), " ", _fmt(t))
     end
     best = argmin(t -> t.time, timings)
     verbose && printstyled(
         "  → fastest: $(_label(best))  ($(_fmt(best.time)))\n";
         bold = true, color = :green,
     )
-    return ChunkPickResult(best.chunk, best.kind, timings, backend, op, recommend(best.chunk, best.kind))
+    return ChunkPickResult(best.chunk, best.kind, best.simd, timings, backend, op, recommend(best.chunk, best.kind, best.simd))
 end
 
 function _fmt(t::Real) # t in seconds
@@ -146,9 +155,9 @@ function Base.show(io::IO, ::MIME"text/plain", r::ChunkPickResult)
     println(io, "ChunkPickResult ($(backendname(r.backend)), :$(r.op))")
     tmin = minimum(t.time for t in r.timings)
     for t in r.timings
-        best = t.chunk == r.chunk && t.kind == r.kind
+        best = t.chunk == r.chunk && t.kind == r.kind && t.simd == r.simd
         rel = t.time / tmin
-        println(io, best ? "* " : "  ", rpad(_label(t), 10), " ", lpad(_fmt(t.time), 10), "  ", @sprintf("%.2fx", rel))
+        println(io, best ? "* " : "  ", rpad(_label(t), 14), " ", lpad(_fmt(t.time), 10), "  ", @sprintf("%.2fx", rel))
     end
     print(io, "→ ", r.recommendation)
 end
