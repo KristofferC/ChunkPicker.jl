@@ -203,6 +203,23 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
             cs = ChunkPicker.smart_chunks(n)
             @test length(cs) <= 12 && all(c -> 1 <= c <= min(n, 16) || c == n, cs)
         end
+        # Float32 raises the caps to 24 and drops 2 from the base set
+        @test ChunkPicker.smart_chunks(9, Float32) == [3, 4, 5, 6, 8, 9]
+        @test ChunkPicker.smart_chunks(24, Float32) == [3, 4, 6, 8, 12, 16, 24]
+        @test ChunkPicker.smart_chunks(100, Float32) == [3, 4, 5, 6, 8, 10, 12, 16, 20]
+        @test ChunkPicker.smart_chunks(6, Float64) == ChunkPicker.smart_chunks(6)
+        for n in 5:200
+            cs = ChunkPicker.smart_chunks(n, Float32)
+            @test length(cs) <= 12 && all(c -> 1 <= c <= min(n, 24) || c == n, cs)
+        end
+    end
+
+    @testset "Float32 smart sweep" begin
+        n = 9
+        x = rand(Float32, n)
+        res = pick_chunk(HyperHessiansBackend(), f, x; seconds = SECS, verbose = false)
+        chunk_timings = filter(t -> t.kind === :chunk, res.timings)
+        @test sort!(unique([t.chunk for t in chunk_timings])) == ChunkPicker.smart_chunks(n, Float32)
     end
 
     @testset "brute force behind chunks = :all" begin

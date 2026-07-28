@@ -47,7 +47,7 @@ function ChunkPicker.pick_chunk(
     end
     smart = chunks === :smart
     candidates = Tuple{Int, Symbol, Bool}[]
-    for N in ChunkPicker._resolve_chunks(chunks, length(x), op)
+    for N in ChunkPicker._resolve_chunks(chunks, length(x), op, eltype(x))
         push!(candidates, (N, :chunk, false))
         simd && simd_ok && push!(candidates, (N, :chunk, true))
     end

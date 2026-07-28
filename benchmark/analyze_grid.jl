@@ -127,6 +127,7 @@ function smart_set(
         base = [2, 3, 4, 5, 6, 8, 12],
         frontier_k = 2:3,
         divisors = false, # also chunks that divide n evenly (no padded chunk)
+        cap = 16,
         jet_simd_max = 7,
         simd_chunks = :all, # :all | :even
     )
@@ -142,8 +143,8 @@ function smart_set(
         chunks = sort!(unique(vcat(
             [c for c in base if c < n],
             n <= single_max ? [n] : Int[],
-            [cld(n, k) for k in frontier_k if cld(n, k) <= 16 && cld(n, k) < n],
-            divisors ? [d for d in 4:16 if d < n && n % d == 0] : Int[],
+            [cld(n, k) for k in frontier_k if cld(n, k) <= cap && cld(n, k) < n],
+            divisors ? [d for d in 4:cap if d < n && n % d == 0] : Int[],
         )))
         for c in chunks
             addc(c, false)

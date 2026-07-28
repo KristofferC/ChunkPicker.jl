@@ -94,9 +94,10 @@ res.kind  # :chunk or :jet — which representation won
 ```
 
 The `Jet` is benchmarked with and without SIMD.Vec-forced arithmetic (like the
-chunked configs, see below). Because the jet's unrolled triangle makes compile time
-grow steeply with `length(x)`, the candidate is only included up to `length(x) <= 32`
-by default; pass `jet = <n>` (or `jet = true` for no cap) to raise it. `Jet` requires
+chunked configs, see below). Under the default `chunks = :smart` the Jet candidate is
+included up to `length(x) = 16` and its simd flavor up to 7, past which they never
+won in the measured grid; pass an explicit `jet = <n>` (or `jet = true` for no cap)
+to include it further, `chunks = :all` for the fully exhaustive sweep. `Jet` requires
 a HyperHessians version that defines it
 ([PR #55](https://github.com/KristofferC/HyperHessians.jl/pull/55) or later); on older
 versions the Jet candidates are skipped. Disable them explicitly with `jet = false`.
@@ -127,10 +128,12 @@ brute-force grid (6 function families × 20 input sizes × chunks 1:16 × simd o
 on AVX2, AVX-512 and NEON — see `benchmark/RESULTS.md`): a small base set
 `{2, 3, 4, 6, 8, 12, 16}`, the full-vector `n` while `n ≤ 16`, `⌈n/2⌉`/`⌈n/3⌉`
 (fewest evaluations per dual size), and divisors of `n` in `4:16` (no padded
-trailing chunk); everything for `n ≤ 4`. Across the measured grid the best
-candidate in this set is within 2% of the exhaustive optimum in 99% of cases
-(worst 9%), with ~40% fewer benchmarks than the dense sweep — which itself misses
-some of the true winners (e.g. full-vector at `n = 13..16`).
+trailing chunk); everything for `n ≤ 4`. For `Float32` inputs the caps rise to 24
+(the doubled SIMD lane count moves the winners up). Across the measured grid the
+best candidate in this set is within 2% of the exhaustive optimum in 99% of
+Float64 cases (worst 9%) and exactly optimal in every Float32 case, with ~40%
+fewer benchmarks than the dense sweep — which itself misses some of the true
+winners (e.g. full-vector at `n = 13..16`).
 
 Pass `chunks = :all` for the exhaustive brute-force sweep, or an explicit iterable
 of sizes.
@@ -145,7 +148,8 @@ of sizes.
 - `seconds`  — per-candidate benchmark budget (default `0.5`).
 - `verbose`  — print progress (default `true`).
 - `jet`      — HyperHessians only: max input length for which the `Jet` variants are
-  included (default `32`), or `true`/`false` to force/disable them.
+  included (default 16 under `chunks = :smart`, else 32), or `true`/`false` to
+  force/disable them.
 - `simd`     — HyperHessians only: also benchmark SIMD.Vec-forced variants (default `true`).
 
 ## Result

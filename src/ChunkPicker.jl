@@ -186,35 +186,41 @@ end
 ## candidate; DI's preparation is rebuilt with it. The AD package itself
 ## (ForwardDiff, HyperHessians) must be loaded for DI to drive it.
 """
-    smart_chunks(n::Integer) -> Vector{Int}
+    smart_chunks(n::Integer[, T::Type]) -> Vector{Int}
 
-The default chunk-size candidates for an input of length `n`: the sizes that
-ever win, measured on a benchmark grid of 6 function families x 20 input
-sizes x chunks 1:16 x simd on/off, on AVX2 (Arrow Lake), AVX-512 (Zen 4) and
-NEON (Apple M4) — see `benchmark/RESULTS.md`. For `n <= 4` everything is
-included; above that:
+The default chunk-size candidates for an input of length `n` with eltype `T`:
+the sizes that ever win, measured on a benchmark grid of 6 function families
+x 20 input sizes x chunks 1:16 (1:24 for Float32) x simd on/off, on AVX2
+(Arrow Lake), AVX-512 (Zen 4) and NEON (Apple M4) — see
+`benchmark/RESULTS.md`. For `n <= 4` everything is included; above that:
 
 - a base set `{2, 3, 4, 6, 8, 12, 16}`: small chunks win for cheap
   functions (dual size dominates), SIMD-width multiples for expensive ones;
-- `n` itself while `n <= 16`: the whole Hessian in one evaluation;
+- `n` itself while `n <= cap`: the whole Hessian in one evaluation;
 - `cld(n, 2)` and `cld(n, 3)`: fewest evaluations per dual size;
-- divisors of `n` in `4:16`: no padded trailing chunk.
+- divisors of `n` in `4:cap`: no padded trailing chunk.
 
-Across the measured grid the best candidate in this set is within 2% of the
-exhaustive optimum in 99% of cases (worst 9%), with ~40% fewer candidates
-than the previous dense sweep. Pass `chunks = :all` to `pick_chunk` for the
-exhaustive sweep instead.
+`cap` is 16, except for `Float32` where the doubled SIMD lane count moves
+the winners up: `cap` is 24 and the base set drops 2. Across the measured
+grid the best candidate in this set is within 2% of the exhaustive optimum
+in 99% of Float64 cases (worst 9%) and exactly optimal in every Float32
+case, with ~40% fewer candidates than the previous dense sweep. Pass
+`chunks = :all` to `pick_chunk` for the exhaustive sweep instead.
 """
-function smart_chunks(n::Integer)
+smart_chunks(n::Integer) = _smart_chunks(n, (2, 3, 4, 6, 8, 12, 16), 16)
+smart_chunks(n::Integer, ::Type{T}) where {T} = smart_chunks(n)
+smart_chunks(n::Integer, ::Type{Float32}) = _smart_chunks(n, (3, 4, 6, 8, 12, 16), 24)
+
+function _smart_chunks(n::Integer, base, cap::Int)
     n <= 0 && return Int[]
     n <= 4 && return collect(1:n)
-    chunks = Int[c for c in (2, 3, 4, 6, 8, 12, 16) if c < n]
-    n <= 16 && push!(chunks, n)
+    chunks = Int[c for c in base if c < n]
+    n <= cap && push!(chunks, n)
     for k in 2:3
         c = cld(n, k)
-        c < n && c <= 16 && push!(chunks, c)
+        c < n && c <= cap && push!(chunks, c)
     end
-    for d in 4:16
+    for d in 4:cap
         d < n && n % d == 0 && push!(chunks, d)
     end
     return sort!(unique!(chunks))
@@ -222,12 +228,13 @@ end
 
 # `chunks` kwarg: `:smart` (the measured candidate set above), `:all`
 # (exhaustive brute force), or any iterable of sizes.
-function _resolve_chunks(chunks, n::Int, op::Symbol)
-    chunks === :smart && return smart_chunks(n)
+function _resolve_chunks(chunks, n::Int, op::Symbol, ::Type{T} = Float64) where {T}
+    chunks === :smart && return smart_chunks(n, T)
     if chunks === :all
         op === :hessian || op === :hvp || return collect(1:min(n, 32))
-        full = collect(1:min(n, 16))
-        16 < n <= 20 && push!(full, n)
+        cap = T === Float32 ? 24 : 16
+        full = collect(1:min(n, cap))
+        cap < n <= 20 && push!(full, n)
         return full
     end
     chunks isa Symbol && throw(ArgumentError("`chunks` must be `:smart`, `:all`, or an iterable of sizes, got :$chunks"))
@@ -257,7 +264,7 @@ function pick_chunk(
         )
     )
     tx = op === :hvp ? _tangent_tuple(x, tangents) : nothing
-    candidates = [(N, :chunk, false) for N in _resolve_chunks(chunks, length(x), op)]
+    candidates = [(N, :chunk, false) for N in _resolve_chunks(chunks, length(x), op, eltype(x))]
     bench = (N, _kind, _simd) -> _bench_di(Val(op), f, _with_chunk(backend, N), x, tx, seconds)
     name = backendname(backend)
     recommend = (N, _kind, _simd) -> "$name(chunksize = $N)"

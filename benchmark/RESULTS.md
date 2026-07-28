@@ -58,9 +58,35 @@ strictly dominates the old dense sweep: fewer candidates, lower regret.
 
 ## Float32
 
-Measured with `GRID_ELTYPE=Float32` (reduced grid, chunks to 24) to check
-whether the doubled SIMD lane count shifts winners past the Float64 cap of
-16. (Results pending; the rule is currently eltype-independent.)
+Measured with `GRID_ELTYPE=Float32` (reduced grid: 9 sizes, chunks to 24)
+on the same three machines. The doubled SIMD lane count moves winners up,
+most on wide registers: `c16+simd` dominates large n on Zen 4, `c20` wins
+where it divides `n = 100`, `c24` appears as runner-up (full-vector at 24),
+and full-vector wins extend to `n = 16`; NEON stays close to the Float64
+picture. `smart_chunks(n, Float32)` therefore raises the caps (full-vector,
+frontier, divisors) from 16 to 24 and drops 2 from the base set: exactly
+optimal in all 162 measured Float32 cases, mean 12.9 candidates. The
+Float64 rule applied to Float32 data has max regret 1.16 (the `c20`
+divisor case).
+
+## HyperHessians' default chunk
+
+The same data scores HyperHessians' function-agnostic default
+(`pickchunksize`; its action space is a plain non-simd chunk), against the
+best non-simd chunk per case:
+
+| eltype  | rule                       | geo   | p90  | max  |
+| ------- | -------------------------- | ----- | ---- | ---- |
+| Float64 | `min(n, 8)` (old)          | 1.444 | 3.10 | 5.72 |
+| Float64 | `n≤10: n, n≤32: 4, else 6` | 1.137 | 1.64 | 2.51 |
+| Float32 | `min(n, 8)` (old)          | 1.359 | 2.67 | 4.04 |
+| Float32 | `n≤12: n, else 6`          | 1.231 | 1.79 | 2.32 |
+
+Chunk 8 is disastrous around `n = 9..12` (geomean regret 2.3–2.9x there:
+e.g. `n = 9` does three evaluations with 8-wide duals where full-vector
+does one). The remaining ~1.2x is irreducible without knowing the function
+— cheap functions want tiny chunks, expensive ones want wide — which is
+what `pick_chunk` is for.
 
 ## Data
 
