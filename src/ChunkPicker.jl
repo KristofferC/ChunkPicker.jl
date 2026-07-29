@@ -236,7 +236,7 @@ end
 _smart_chunks_fd_grad(n::Integer) =
     _smart_chunks(n, (3, 4, 5, 8, 12, 16, 24, 32), 32; frontier_k = 1:0, divisors = 1:0)
 _smart_chunks_fd_hess(n::Integer) =
-    _smart_chunks(n, (4, 8, 12, 16), 16; frontier_k = 2:7)
+    _smart_chunks(n, (4, 6, 8, 12, 16), 16; frontier_k = 2:7)
 _smart_chunks_fd_hvp(n::Integer) =
     _smart_chunks(n, (2, 4, 8, 16), 32; frontier_k = 2:7, divisors = 12:4:24)
 

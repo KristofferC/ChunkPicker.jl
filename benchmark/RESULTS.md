@@ -99,20 +99,22 @@ split is Float32 on NEON, which prefers a tail of 4 over 6 (~13% geomean)
 
 `fd_grid.jl` repeats the exercise for `ForwardDiff.gradient!` (chunks 1:32,
 sizes to 200) and `ForwardDiff.hessian!` (chunks 1:16), Float64 + a Float32
-mini, on corem-uppsala (AVX2). The economics differ from HyperHessians:
+mini, on all three machines. The economics differ from HyperHessians:
 
 - gradient: per-evaluation cost is only O(chunk), so plateaus are wide and
   winners sit high — per-function sweet spots at `{4, 5}` / `{8, 9, 12}` /
   `{24..32}` (cheap rosenbrock), and full-vector wins through `n = 32` for
   cheap functions. The set `{3, 4, 5, 8, 12, 16, 24, 32}` + full-vector
-  `n ≤ 32` (~6 candidates vs the old dense 32) scores geo 1.004 / max 1.14
-  (Float32: 1.007 / 1.15).
+  `n ≤ 32` (~6 candidates vs the old dense 32) scores geo 1.010 / max 1.18
+  across all three machines (Float32: 1.007 / 1.15).
 - hessian: Dual-of-Dual pays its per-evaluation overhead hardest, so the
   *largest* chunks win broadly (`c16` even at `n = 48..64`), with the odd
-  winners (`c11`, `c13`, `c15`) being exactly the `⌈n/k⌉` frontier. The set
-  `{4, 8, 12, 16}` + full-vector `n ≤ 16` + frontier `k = 2..7` + divisors
-  (~5.5 candidates) scores geo 1.001 / max 1.04 on both eltypes. The
-  HyperHessians-derived set does *not* transfer (max 1.29).
+  winners (`c11`, `c13`, `c15`) being exactly the `⌈n/k⌉` frontier — except
+  cheap functions on Zen 4, where `c6` wins outright at every large `n`.
+  The set `{4, 6, 8, 12, 16}` + full-vector `n ≤ 16` + frontier `k = 2..7`
+  + divisors (~6 candidates) scores geo 1.001 / max 1.06 across all three
+  machines and both eltypes. The HyperHessians-derived set does *not*
+  transfer (max 1.29).
 - hvp (mini-measured through DifferentiationInterface): between the two —
   full-vector wins to `n = 32`, frontier/divisor chunks at large `n`, and a
   tiny-chunk tail (`c2`) for very cheap functions.

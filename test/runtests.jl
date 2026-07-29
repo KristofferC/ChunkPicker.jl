@@ -199,7 +199,7 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
         @test ChunkPicker._smart_chunks_fd_grad(100) == [3, 4, 5, 8, 12, 16, 24, 32]
         @test ChunkPicker._smart_chunks_fd_hess(6) == [2, 3, 4, 6]
         @test ChunkPicker._smart_chunks_fd_hess(48) == [4, 6, 7, 8, 10, 12, 16]
-        @test ChunkPicker._smart_chunks_fd_hess(100) == [4, 5, 8, 10, 12, 15, 16]
+        @test ChunkPicker._smart_chunks_fd_hess(100) == [4, 5, 6, 8, 10, 12, 15, 16]
         @test ChunkPicker._smart_chunks_fd_hvp(32) == [2, 4, 5, 6, 7, 8, 11, 16, 32]
         @test ChunkPicker._smart_chunks_fd_hvp(100) == [2, 4, 8, 15, 16, 17, 20, 25]
         for gen in (ChunkPicker._smart_chunks_fd_grad, ChunkPicker._smart_chunks_fd_hess, ChunkPicker._smart_chunks_fd_hvp), n in 5:200
