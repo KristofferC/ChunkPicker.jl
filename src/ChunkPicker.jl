@@ -92,11 +92,12 @@ return the fastest variant.
 # Keywords
 - `op`       : `:gradient`, `:jacobian`, `:hessian` or `:hvp` (`AutoForwardDiff`);
                `:hessian` or `:hvp` (`AutoHyperHessians` and HyperHessians native).
-- `chunks`   : candidate chunk sizes. For `:hessian`/`:hvp` the default is `:smart` —
-               the measured candidate set of [`smart_chunks`](@ref), which skips
-               known-bad sizes (e.g. chunk 7 for `length(x) == 20`); pass `:all` for
-               the exhaustive brute-force sweep, or any explicit iterable of sizes.
-               `:gradient`/`:jacobian` default to `1:min(length(x), 32)`.
+- `chunks`   : candidate chunk sizes. The default `:smart` benchmarks only the
+               measured candidate set for the op and backend (HyperHessians:
+               [`smart_chunks`](@ref); ForwardDiff: op-specific sets from the
+               ForwardDiff grid — e.g. the gradient sweep tests ~6 sizes instead
+               of 32). Pass `:all` for the exhaustive brute-force sweep, or any
+               explicit iterable of sizes.
 - `tangents` : for `op = :hvp`, the tangent vector (or tuple of vectors for bundled
                directions). Defaults to a vector of ones.
 - `seconds`  : per-candidate benchmark budget passed to BenchmarkTools (default `0.5`).
@@ -211,25 +212,43 @@ smart_chunks(n::Integer) = _smart_chunks(n, (2, 3, 4, 6, 8, 12, 16), 16)
 smart_chunks(n::Integer, ::Type{T}) where {T} = smart_chunks(n)
 smart_chunks(n::Integer, ::Type{Float32}) = _smart_chunks(n, (3, 4, 6, 8, 12, 16), 24)
 
-function _smart_chunks(n::Integer, base, cap::Int)
+function _smart_chunks(n::Integer, base, cap::Int; frontier_k = 2:3, divisors = 4:cap, single_max = cap)
     n <= 0 && return Int[]
     n <= 4 && return collect(1:n)
     chunks = Int[c for c in base if c < n]
-    n <= cap && push!(chunks, n)
-    for k in 2:3
+    n <= single_max && push!(chunks, n)
+    for k in frontier_k
         c = cld(n, k)
-        c < n && c <= cap && push!(chunks, c)
+        1 < c < n && c <= cap && push!(chunks, c)
     end
-    for d in 4:cap
+    for d in divisors
         d < n && n % d == 0 && push!(chunks, d)
     end
     return sort!(unique!(chunks))
 end
 
-# `chunks` kwarg: `:smart` (the measured candidate set above), `:all`
-# (exhaustive brute force), or any iterable of sizes.
-function _resolve_chunks(chunks, n::Int, op::Symbol, ::Type{T} = Float64) where {T}
-    chunks === :smart && return smart_chunks(n, T)
+# ForwardDiff sweeps use their own sets, measured on the ForwardDiff grid
+# (fd_grid.jl in benchmark/): gradient cost per evaluation is only O(chunk),
+# so plateaus are wide and winners sit high (full-vector keeps winning to
+# n = 32 for cheap functions); the Dual-of-Dual hessian amortizes its
+# per-evaluation overhead hardest, favoring the largest chunks plus the
+# cld(n, k) frontier and divisors; hvp sits between them.
+_smart_chunks_fd_grad(n::Integer) =
+    _smart_chunks(n, (3, 4, 5, 8, 12, 16, 24, 32), 32; frontier_k = 1:0, divisors = 1:0)
+_smart_chunks_fd_hess(n::Integer) =
+    _smart_chunks(n, (4, 6, 8, 12, 16), 16; frontier_k = 2:7)
+_smart_chunks_fd_hvp(n::Integer) =
+    _smart_chunks(n, (2, 4, 8, 16), 32; frontier_k = 2:7, divisors = 12:4:24)
+
+# `chunks` kwarg: `:smart` (the measured candidate set for the given op and
+# backend family), `:all` (exhaustive brute force), or any iterable of sizes.
+function _resolve_chunks(chunks, n::Int, op::Symbol, ::Type{T} = Float64, family::Symbol = :hyperhessians) where {T}
+    if chunks === :smart
+        family === :forwarddiff || return smart_chunks(n, T)
+        op === :hessian && return _smart_chunks_fd_hess(n)
+        op === :hvp && return _smart_chunks_fd_hvp(n)
+        return _smart_chunks_fd_grad(n) # :gradient / :jacobian
+    end
     if chunks === :all
         op === :hessian || op === :hvp || return collect(1:min(n, 32))
         cap = T === Float32 ? 24 : 16
@@ -252,7 +271,7 @@ _supported_ops(::AutoHyperHessians) = (:hessian, :hvp)
 function pick_chunk(
         backend::ChunkedADType, f, x::AbstractArray;
         op::Symbol = first(_supported_ops(backend)),
-        chunks = op === :hessian || op === :hvp ? (:smart) : 1:min(length(x), 32),
+        chunks = :smart,
         tangents = nothing,
         seconds::Real = 0.5,
         verbose::Bool = true,
@@ -264,7 +283,8 @@ function pick_chunk(
         )
     )
     tx = op === :hvp ? _tangent_tuple(x, tangents) : nothing
-    candidates = [(N, :chunk, false) for N in _resolve_chunks(chunks, length(x), op, eltype(x))]
+    family = backend isa AutoForwardDiff ? :forwarddiff : :hyperhessians
+    candidates = [(N, :chunk, false) for N in _resolve_chunks(chunks, length(x), op, eltype(x), family)]
     bench = (N, _kind, _simd) -> _bench_di(Val(op), f, _with_chunk(backend, N), x, tx, seconds)
     name = backendname(backend)
     recommend = (N, _kind, _simd) -> "$name(chunksize = $N)"

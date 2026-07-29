@@ -135,6 +135,14 @@ Float64 cases (worst 9%) and exactly optimal in every Float32 case, with ~40%
 fewer benchmarks than the dense sweep — which itself misses some of the true
 winners (e.g. full-vector at `n = 13..16`).
 
+The `AutoForwardDiff` sweeps use their own measured sets (from a ForwardDiff grid,
+same method): the `:gradient`/`:jacobian` sweep tests ~6 sizes instead of the old
+dense `1:32` (base `{3, 4, 5, 8, 12, 16, 24, 32}` plus full-vector while `n ≤ 32`),
+and `:hessian`/`:hvp` get Dual-of-Dual-specific sets where the largest chunks, the
+`⌈n/k⌉` frontier and divisors dominate. Within the measured grid the best candidate
+in each set is within 4% of the exhaustive optimum at worst for hessian, and within
+1% on geometric average for gradient.
+
 Pass `chunks = :all` for the exhaustive brute-force sweep, or an explicit iterable
 of sizes.
 

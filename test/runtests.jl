@@ -20,7 +20,9 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
         @test res.kind === :chunk
         @test !res.simd
         @test res.chunk in 1:n
-        expected = op === :hessian || op === :hvp ? ChunkPicker.smart_chunks(n) : collect(1:n)
+        expected = op === :hessian ? ChunkPicker._smart_chunks_fd_hess(n) :
+            op === :hvp ? ChunkPicker._smart_chunks_fd_hvp(n) :
+            ChunkPicker._smart_chunks_fd_grad(n)
         @test [t.chunk for t in res.timings] == expected
         @test all(t -> t.kind === :chunk && !t.simd, res.timings)
         @test occursin("AutoForwardDiff(chunksize = $(res.chunk))", res.recommendation)
@@ -188,6 +190,22 @@ g = x -> [sum(sin, x), prod(x), sum(x .^ 3)]  # R^n -> R^m
             op = :hvp, tangents = (v, 2 .* v), seconds = SECS, verbose = false,
         )
         @test res_bundle.op === :hvp
+    end
+
+    @testset "ForwardDiff smart sets" begin
+        @test ChunkPicker._smart_chunks_fd_grad(3) == [1, 2, 3]
+        @test ChunkPicker._smart_chunks_fd_grad(6) == [3, 4, 5, 6]
+        @test ChunkPicker._smart_chunks_fd_grad(20) == [3, 4, 5, 8, 12, 16, 20]
+        @test ChunkPicker._smart_chunks_fd_grad(100) == [3, 4, 5, 8, 12, 16, 24, 32]
+        @test ChunkPicker._smart_chunks_fd_hess(6) == [2, 3, 4, 6]
+        @test ChunkPicker._smart_chunks_fd_hess(48) == [4, 6, 7, 8, 10, 12, 16]
+        @test ChunkPicker._smart_chunks_fd_hess(100) == [4, 5, 6, 8, 10, 12, 15, 16]
+        @test ChunkPicker._smart_chunks_fd_hvp(32) == [2, 4, 5, 6, 7, 8, 11, 16, 32]
+        @test ChunkPicker._smart_chunks_fd_hvp(100) == [2, 4, 8, 15, 16, 17, 20, 25]
+        for gen in (ChunkPicker._smart_chunks_fd_grad, ChunkPicker._smart_chunks_fd_hess, ChunkPicker._smart_chunks_fd_hvp), n in 5:200
+            cs = gen(n)
+            @test length(cs) <= 12 && issorted(cs) && allunique(cs)
+        end
     end
 
     @testset "smart_chunks" begin
